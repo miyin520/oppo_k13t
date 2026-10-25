@@ -658,6 +658,29 @@ jobs:
           echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
           
           cd kernel_workspace/common
+
+          # ========== 修复 clang r510928 编译 dtc / libfdt 时的 -Werror 报错 ==========
+          # 现象：scripts/dtc/dtc-parser.tab.c: error: assigning to 'char *' from 'const char *'
+          #       discards qualifiers [-Werror,-Wincompatible-pointer-types-discards-qualifiers]
+          # 原因：新版 clang 把这条诊断当成 error，而 host 工具(dtc/fdtoverlay/resolve_btfids/objtool)
+          #       走的是 HOSTCFLAGS，不受 KCFLAGS 影响，所以内核侧的 -Wno-error 管不到它。
+          echo "内核树版本: $(sed -n '1,5p' Makefile | tr '\n' ' ')"
+          echo "dtc-parser.y 行数: $(wc -l < scripts/dtc/dtc-parser.y)"
+          export HOSTCFLAGS="-Wno-error -Wno-incompatible-pointer-types-discards-qualifiers"
+          export HOSTCXXFLAGS="-Wno-error"
+          export USERCFLAGS="-Wno-error"
+          echo "HOSTCFLAGS=$HOSTCFLAGS"
+          # 再给 dtc 的每个 obj 单独兜底：hostc_flags 里 HOSTCFLAGS_<obj>.o 排在最后，
+          # 用 -w 直接静默 host 工具的全部警告（dtc/fdtoverlay 这类小工具静默无副作用）
+          for OBJ in dtc dtc-lexer.lex.o dtc-parser.tab.o flattree.o fstree.o data.o livetree.o \
+                     treesource.o srcpos.o checks.o util.o fdtoverlay.o libfdt/fdt.o libfdt/fdt_ro.o \
+                     libfdt/fdt_wip.o libfdt/fdt_sw.o libfdt/fdt_rw.o libfdt/fdt_strerror.o \
+                     libfdt/fdt_empty_tree.o libfdt/fdt_addresses.o libfdt/fdt_overlay.o; do
+            echo "HOSTCFLAGS_$OBJ += -w" >> scripts/dtc/Makefile
+          done
+          echo "已为 scripts/dtc 的 host obj 注入 -Wno-error"
+          # ======================================================================
+
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
           chmod 777 ./*.so
