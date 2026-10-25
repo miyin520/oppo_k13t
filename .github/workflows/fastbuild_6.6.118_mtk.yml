@@ -574,10 +574,65 @@ jobs:
       - name: 集成 NoMount（v2.2.0）
         env:
           NOMOUNT_REF: ${{ vars.NOMOUNT_REF || 'v2.2.0' }}
+          # y = 编进内核(Image 内置) / m = 编成 LKM / none = 跳过本步骤
+          NOMOUNT_MODE: y
         run: |
-          echo "===== 集成 NoMount ref=$NOMOUNT_REF ====="
-          wget -q --tries=3 "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/.github/scripts/setup_nomount.sh" -O /tmp/setup_nomount.sh
-          bash /tmp/setup_nomount.sh "$GITHUB_WORKSPACE/kernel_workspace" "$NOMOUNT_REF"
+          set -uo pipefail
+          echo "===== 集成 NoMount ref=$NOMOUNT_REF mode=$NOMOUNT_MODE ====="
+          if [ "$NOMOUNT_MODE" = "none" ]; then
+            echo "已按配置跳过 NoMount"
+            exit 0
+          fi
+
+          cd "$GITHUB_WORKSPACE/kernel_workspace"
+          echo "工作目录: $(pwd)"
+          ls -d common/fs >/dev/null 2>&1 || { echo "::error::找不到内核树 common/fs"; exit 1; }
+
+          SCRIPT=/tmp/setup_nomount.sh
+          rm -f "$SCRIPT"
+          OK=0
+          for URL in \
+            "https://raw.githubusercontent.com/maxsteeel/nomount/$NOMOUNT_REF/kernel/setup.sh" \
+            "https://cdn.jsdelivr.net/gh/maxsteeel/nomount@$NOMOUNT_REF/kernel/setup.sh" \
+            "https://gcore.jsdelivr.net/gh/maxsteeel/nomount@$NOMOUNT_REF/kernel/setup.sh" \
+            "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_REF_NAME/.github/scripts/setup_nomount.sh" \
+          ; do
+            echo "----- 尝试下载: $URL"
+            if timeout 90 wget --tries=3 --timeout=30 --server-response "$URL" -O "$SCRIPT" 2>/tmp/wget.err \
+               && [ -s "$SCRIPT" ] && head -n 1 "$SCRIPT" | grep -q '^#!'; then
+              OK=1
+              echo "下载成功：$(wc -c < "$SCRIPT") 字节"
+              break
+            fi
+            echo "该源不可用，原因（wget 响应）："
+            grep -Ei "HTTP/|ERROR|refused|not found|timed out" /tmp/wget.err | tail -n 3 | sed 's/^/    /'
+            rm -f "$SCRIPT"
+          done
+
+          if [ "$OK" != "1" ]; then
+            echo "::error::所有源都拿不到 NoMount 集成脚本，请确认 NOMOUNT_REF=$NOMOUNT_REF 是否存在于 maxsteeel/nomount"
+            exit 8
+          fi
+
+          echo "----- 安装 NoMount 到内核树"
+          bash "$SCRIPT" "$NOMOUNT_REF" || { echo "::error::setup.sh 执行失败"; exit 1; }
+
+          echo "----- 校验补丁结果"
+          test -e common/fs/nomount || { echo "::error::common/fs/nomount 未创建"; exit 1; }
+          grep -n "nomount" common/fs/Makefile
+          grep -n "fs/nomount/Kconfig" common/fs/Kconfig
+          ls -ld NoMount common/fs/nomount
+
+          DEFCONFIG=common/arch/arm64/configs/gki_defconfig
+          # NoMount 用 register_key_type() 存规则，6.6 树里 CONFIG_KEYS 默认是 n，
+          # 不开会直接编译报错：struct key_type 未定义。这里一并补上。
+          for KV in "CONFIG_NOMOUNT=$NOMOUNT_MODE" "CONFIG_KEYS=y" "CONFIG_ASSOCIATIVE_ARRAY=y"; do
+            K="$(echo "$KV" | cut -d= -f1)"
+            sed -i "/^${K}=/d" "$DEFCONFIG"
+            echo "$KV" >> "$DEFCONFIG"
+          done
+          grep -nE '^CONFIG_(NOMOUNT|KEYS|ASSOCIATIVE_ARRAY)=' "$DEFCONFIG"
+          echo "===== NoMount 集成完成 ====="
       - name: 构建内核
         run: |
           WORKDIR="$(pwd)"
