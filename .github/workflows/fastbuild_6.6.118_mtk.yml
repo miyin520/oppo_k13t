@@ -504,17 +504,62 @@ jobs:
           set -euo pipefail
           echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
           cd kernel_workspace/common
-          # 【修复】原来为了拿 4 个文件把整个仓库 clone 一遍（几十上百 MB、还要 actor 名做目录），
-          # 改成直接 raw 下载，快且不受 actor 名影响。
           RAW="https://github.com/${GITHUB_REPOSITORY}/raw/refs/heads/${GITHUB_REF_NAME}/zram_patch"
           for f in 001-lz4.patch 001-lz4-clearMake.patch 002-zstd.patch; do
             wget -q "$RAW/$f" -O "$f" || { echo "::error::下载 $f 失败"; exit 1; }
           done
-          wget -q "$RAW/lz4armv8.S" -O ./lib/lz4armv8.S || { echo "::error::下载 lz4armv8.S 失败"; exit 1; }
+          wget -q "$RAW/lz4armv8.S" -O /tmp/lz4armv8.S || { echo "::error::下载 lz4armv8.S 失败"; exit 1; }
 
-          patch -p1 -F 3 < 001-lz4.patch || echo "::warning::001-lz4.patch 未完全应用"
-          patch -p1 -F 3 < 001-lz4-clearMake.patch || echo "::warning::001-lz4-clearMake.patch 未完全应用"
+          # 【修复/踩坑记录】001-lz4.patch 是 git 格式、含「纯 rename」条目
+          #   rename from fs/f2fs/lz4armv8/lz4armv8.S
+          #   rename to   lib/lz4/lz4armv8/lz4armv8.S
+          # GNU patch 不认 rename 元数据，纯改名没有 @@ hunk 会被静默跳过，于是
+          # lib/lz4/Makefile 里 obj-$(CONFIG_ARM64) += lz4armv8/lz4accel.o lz4armv8.o
+          # 有 lz4armv8.o 的引用、却没有对应源码，编译直接：
+          #   No rule to make target 'lib/lz4/lz4armv8/lz4armv8.o'
+          # 所以这两个补丁必须优先 git apply（在非 git 目录也能用）。
+          apply_patch() {
+            local p="$1"
+            if git apply -p1 "$p" 2>/tmp/ga.err; then
+              echo "[git apply] $p OK"
+            else
+              echo "::warning::git apply $p 失败，回退 patch（rename 会丢，随后补齐）"
+              sed 's/^/    /' /tmp/ga.err | head -n 5
+              patch -p1 -F 3 < "$p" || echo "::warning::$p 未完全应用"
+            fi
+          }
+          apply_patch 001-lz4.patch
+          apply_patch 001-lz4-clearMake.patch
           patch -p1 -F 3 < 002-zstd.patch || echo "::warning::002-zstd.patch 未完全应用"
+
+          # 兜底：万一 rename 没落地，把 lz4armv8 三件套补到 lib/lz4/lz4armv8/
+          mkdir -p lib/lz4/lz4armv8
+          for f in lz4armv8.S lz4accel.c lz4accel.h; do
+            [ -s "lib/lz4/lz4armv8/$f" ] && continue
+            if [ -s "fs/f2fs/lz4armv8/$f" ]; then
+              cp "fs/f2fs/lz4armv8/$f" "lib/lz4/lz4armv8/$f"
+              echo "已从 fs/f2fs/lz4armv8 补齐 $f"
+            elif [ "$f" = "lz4armv8.S" ]; then
+              cp /tmp/lz4armv8.S "lib/lz4/lz4armv8/$f"
+              echo "已用仓库 zram_patch/lz4armv8.S 补齐 $f"
+            fi
+          done
+
+          # 把被拒绝的补丁块（.rej）点名，别再让它们静默过去
+          REJ=$(find lib include fs crypto -name '*.rej' 2>/dev/null | head -n 10 || true)
+          if [ -n "$REJ" ]; then
+            echo "::warning::以下文件存在被拒绝的补丁块（.rej），相关改动未生效："
+            printf '%s\n' "$REJ"
+          fi
+
+          # 硬校验：Makefile 引用了 lz4armv8，就必须真的有源码
+          grep -q 'lz4armv8' lib/lz4/Makefile \
+            || { echo "::error::lib/lz4/Makefile 里没有 lz4armv8 条目，补丁未生效"; exit 1; }
+          for f in lz4armv8.S lz4accel.c; do
+            [ -s "lib/lz4/lz4armv8/$f" ] \
+              || { echo "::error::缺少 lib/lz4/lz4armv8/$f"; ls -l lib/lz4/lz4armv8 || true; exit 1; }
+          done
+          echo "lz4/zstd 补丁应用完成，校验通过"
 
       - name: 应用 lz4kd 补丁
         if: inputs.lz4kd_enable
@@ -1014,12 +1059,57 @@ jobs:
 
           JOBS="$(nproc --all)"
           echo "并行度: $JOBS"
+          BUILD_LOG="$WORKDIR/kernel_workspace/build.log"
+          : > "$BUILD_LOG"
+
+          # ------------------------------------------------------------------
+          # 【修复】make 失败时不再只剩一句 "Process completed with exit code 2"。
+          # 顶层 Makefile:1972（$(build-dir)=.）和 :252（__sub-make）只是递归转场，
+          # -j 并行下真正失败的子目录可能在几千行之前。这里：
+          #   1) 全量 tee 到 build.log
+          #   2) 失败时自动抓「第一处真实错误」及其上下文，打到日志 + Job Summary
+          #   3) build.log 由后续 if: failure() 步骤作为工件上传
+          # ------------------------------------------------------------------
+          set +e
           make -j"$JOBS" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          make -j"$JOBS" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="$SO_DIR/cc-wrapper" LD="$SO_DIR/ld-wrapper" HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+            KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig 2>&1 | tee -a "$BUILD_LOG"
+          CFG_RC=${PIPESTATUS[0]}
+          MAKE_RC=$CFG_RC
+          if [ "$CFG_RC" -eq 0 ]; then
+            make -j"$JOBS" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+              CC="$SO_DIR/cc-wrapper" LD="$SO_DIR/ld-wrapper" HOSTLD=ld.lld O=out \
+              KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee -a "$BUILD_LOG"
+            MAKE_RC=${PIPESTATUS[0]}
+          fi
+          set -e
+
+          if [ "$MAKE_RC" -ne 0 ]; then
+            echo "::error::内核编译失败（make 退出码 $MAKE_RC），正在提取首个真实错误"
+            FIRST=$(grep -nE '(ld\.lld: error|: error:|error: |undefined symbol|fatal error|: Error [0-9]+|Killed)' "$BUILD_LOG" \
+                      | grep -vE '(Makefile:[0-9]+: (\.|__sub-make))' \
+                      | head -n1 | cut -d: -f1 || true)
+            if [ -n "${FIRST:-}" ]; then
+              S=$(( FIRST > 25 ? FIRST - 25 : 1 ))
+              E=$(( FIRST + 25 ))
+              CTX=$(sed -n "${S},${E}p" "$BUILD_LOG")
+              echo "===== 首个错误在第 $FIRST 行，上下文 $S-$E ====="
+            else
+              CTX=$(tail -n 60 "$BUILD_LOG")
+              echo "===== 未匹配到关键字，输出末尾 60 行 ====="
+            fi
+            printf '%s\n' "$CTX"
+            {
+              echo "### ❌ 构建内核失败（退出码 $MAKE_RC）"
+              echo ""
+              echo "首个错误位置：第 ${FIRST:-?} 行，完整日志见工件 build-log。"
+              echo ""
+              echo '```'
+              printf '%s\n' "$CTX"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$MAKE_RC"
+          fi
 
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
           echo "--- 编译后环境文件时间戳: ---"
@@ -1152,6 +1242,14 @@ jobs:
           zip -q -z "../$AK3_NAME" < ./ak3.log
 
           echo "ak3name=$AK3_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 上传构建日志（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log
+          path: ${{ github.workspace }}/kernel_workspace/build.log
+          if-no-files-found: ignore
 
       - name: 上传 Ccache 调试日志
         if: always() && inputs.ccache_debug
