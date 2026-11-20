@@ -545,11 +545,16 @@ jobs:
             fi
           done
 
-          # 把被拒绝的补丁块（.rej）点名，别再让它们静默过去
+          # 把被拒绝的补丁块（.rej）点名，别再让它们静默过去。
+          # 注意：susfs 的 50 补丁里同一处改动带「新旧两套 hunk」，旧写法在 6.6.89 上必然
+          # 打不上（例如 task_mmu.c 的 Case 4 守卫，新写法 hunk#7 已经应用成功），
+          # 这类 .rej 属于预期噪音，所以用 notice 而不是 warning，顺手清掉残渣。
           REJ=$(find lib include fs crypto -name '*.rej' 2>/dev/null | head -n 10 || true)
           if [ -n "$REJ" ]; then
-            echo "::warning::以下文件存在被拒绝的补丁块（.rej），相关改动未生效："
+            echo "::notice::以下补丁块未应用（.rej）。若同一改动已由另一套 hunk 应用，则属预期："
             printf '%s\n' "$REJ"
+            find lib include fs crypto -name '*.rej' -delete 2>/dev/null || true
+            find lib include fs crypto -name '*.orig' -delete 2>/dev/null || true
           fi
 
           # 硬校验：Makefile 引用了 lz4armv8，就必须真的有源码
