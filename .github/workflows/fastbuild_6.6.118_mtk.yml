@@ -20,7 +20,7 @@ on:
         default: 'bakasu'
         options:
           - 'bakasu'
-          - 'sukisu'
+          - 'sukisunova'
           - 'ksunext'
           - 'ksu'
           - 'none'
