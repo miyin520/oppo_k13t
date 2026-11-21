@@ -451,7 +451,7 @@ jobs:
             local url="$1"; shift
             local i
             for i in 1 2 3; do
-              rm -rf KernelSU KernelSU-Next
+              rm -rf KernelSU KernelSU-Next SukiSU-Nova SukiSU-Ultra
               if curl -fsSL "$url" | bash -s "$@"; then
                 if [ -d KernelSU ] || [ -d KernelSU-Next ]; then
                   echo "[KernelSU] 安装脚本第 $i 次成功"
@@ -462,6 +462,29 @@ jobs:
               sleep 5
             done
             echo "::error::KernelSU 安装连续 3 次失败，放弃"
+            return 1
+          }
+
+          # 【上游 bug 绕过】builtin-new 分支的 setup.sh 写的是
+          #   git clone https://github.com/SukiSU-Nova/SukiSU-Nova     （没指定目标目录）
+          #   cd "$GKI_ROOT/KernelSU"                                  （下一行就在这里炸）
+          # 克隆出来叫 SukiSU-Nova/，cd KernelSU 必然失败。这里自己先克隆到 KernelSU，
+          # 让脚本走 "test -d KernelSU ||" 的短路分支，后半段（symlink / Makefile / Kconfig）照常。
+          setup_ksu_precloned() {   # setup_ksu_precloned <owner/repo> <branch>
+            local repo="$1" branch="$2" i
+            for i in 1 2 3; do
+              rm -rf KernelSU KernelSU-Next SukiSU-Nova SukiSU-Ultra
+              if git clone --depth=1 -b "$branch" "https://github.com/${repo}" KernelSU \
+                 && bash KernelSU/kernel/setup.sh "$branch"; then
+                if [ -d KernelSU ]; then
+                  echo "[KernelSU] 预克隆方式第 $i 次成功（$repo@$branch）"
+                  return 0
+                fi
+              fi
+              echo "::warning::SukiSU 预克隆安装第 $i/3 次失败，5 秒后重试"
+              sleep 5
+            done
+            echo "::error::SukiSU 预克隆安装连续 3 次失败，放弃"
             return 1
           }
 
@@ -483,7 +506,7 @@ jobs:
               # 而 builtin 分支的 supercall.c 只有 install fd 处理，没有命令分发，
               # 真正完整的是 builtin-new（SUSFS_MAGIC + 全套 CMD_SUSFS_* + 32 项 Kconfig）。
               # setup.sh 支持 `checkout <branch>`，所以把分支名当参数传进去。
-              setup_ksu "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/builtin-new/kernel/setup.sh" builtin-new
+              setup_ksu_precloned SukiSU-Nova/SukiSU-Nova builtin-new
               printf '%s\n' 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
               cd ./KernelSU
               KSU_VERSION=$(( $(git rev-list --count HEAD 2>/dev/null || echo 0) + 30700 ))
