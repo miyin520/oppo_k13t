@@ -414,6 +414,7 @@ jobs:
         id: ksu_version
         env:
           KSU_TYPE: ${{ inputs.ksu_type }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           cd kernel_workspace
@@ -426,7 +427,7 @@ jobs:
             # 【修复】这里原来不带任何凭据，走的是匿名限流（60 次/小时/IP）。
             # 连着跑几次就会拿不到 Link 头 → 静默退化成 1 页 → KSU 版本号变成 30001。
             # 现在带上 job 自带的 GITHUB_TOKEN（5000 次/小时）。
-            p=$(curl -fsSI -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+            p=$(curl -fsSI -H "Authorization: Bearer ${GH_TOKEN:-}" \
                   -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/${repo}/commits?sha=${ref}&per_page=1" 2>/dev/null \
                 | tr -d '\r' \
@@ -496,7 +497,7 @@ jobs:
               else
                 echo "::warning::KernelSU-Next/kernel/Kbuild 中未找到 KSU_VERSION_FALLBACK，版本号回退需管理器侧处理"
               fi
-              KSU_GIT_TAG=$(curl -fsSL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" \
+              KSU_GIT_TAG=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-}" "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" \
                 | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)
               if [ -n "${KSU_GIT_TAG}" ] && grep -q '^KSU_VERSION_TAG_FALLBACK' kernel/Kbuild 2>/dev/null; then
                 sed -i "s/^KSU_VERSION_TAG_FALLBACK :=.*/KSU_VERSION_TAG_FALLBACK := ${KSU_GIT_TAG}/" kernel/Kbuild
