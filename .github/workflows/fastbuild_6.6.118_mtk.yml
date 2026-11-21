@@ -474,7 +474,10 @@ jobs:
             local repo="$1" branch="$2" i
             for i in 1 2 3; do
               rm -rf KernelSU KernelSU-Next SukiSU-Nova SukiSU-Ultra
-              if git clone --depth=1 -b "$branch" "https://github.com/${repo}" KernelSU \
+              # 注意：这里不能 --depth=1 —— 后面用 `git rev-list --count HEAD + 30700`
+              # 算 KSU 版本号，浅克隆只会数到 1（版本号会变成 30701，管理器对不上）。
+              # 用 blob 过滤的部分克隆：历史完整、体积小。
+              if git clone --filter=blob:none -b "$branch" "https://github.com/${repo}" KernelSU \
                  && bash KernelSU/kernel/setup.sh "$branch"; then
                 if [ -d KernelSU ]; then
                   echo "[KernelSU] 预克隆方式第 $i 次成功（$repo@$branch）"
