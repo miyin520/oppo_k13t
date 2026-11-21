@@ -477,8 +477,13 @@ jobs:
               set_ver "$KSU_VERSION"
               ;;
             sukisunova)
-              echo "正在配置SukiSU Nova..."
-              setup_ksu "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" main
+              echo "正在配置SukiSU Nova (builtin-new 分支)…"
+              # 【关键】main/dev 分支的内核里没有 susfs：kernel/Kconfig 0 处 SUSFS，
+              # 全仓 SUSFS_MAGIC 只在 userspace。上游社区现在的做法是改用 builtin 分支；
+              # 而 builtin 分支的 supercall.c 只有 install fd 处理，没有命令分发，
+              # 真正完整的是 builtin-new（SUSFS_MAGIC + 全套 CMD_SUSFS_* + 32 项 Kconfig）。
+              # setup.sh 支持 `checkout <branch>`，所以把分支名当参数传进去。
+              setup_ksu "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/builtin-new/kernel/setup.sh" builtin-new
               printf '%s\n' 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
               cd ./KernelSU
               KSU_VERSION=$(( $(git rev-list --count HEAD 2>/dev/null || echo 0) + 30700 ))
@@ -538,6 +543,7 @@ jobs:
           esac
 
       - name: 应用 KernelSU & SUSFS 补丁
+        id: susfs
         if: inputs.susfs_enable
         env:
           KSU_TYPE: ${{ inputs.ksu_type }}
@@ -555,10 +561,7 @@ jobs:
           # 而 ksud 发出的 reboot(KSU_INSTALL_MAGIC1, SUSFS_MAGIC, ...) 拿到
           # ERR_CMD_NOT_SUPPORTED 又被它自己当成功 —— 静默失效，界面上还显示正常。
           # 所以这个分支直接跳过补丁，只留一条明确的告警。
-          if [ "$KSU_TYPE" = "sukisunova" ]; then
-            echo "::warning::sukisunova 分支内核没有 susfs 集成（kernel/Kconfig 无 CONFIG_KSU_SUSFS，全仓 SUSFS_MAGIC 只出现在 userspace），本次跳过 susfs 补丁与配置；需要 susfs 请选 ksunext / bakasu / ksu"
-            exit 0
-          fi
+          # （原来这里把 sukisunova 写死跳过；现在它走 builtin-new 分支，改为应用完补丁后统一判定）
 
           echo "正在添加susfs补丁..."
           rm -rf susfs4ksu
@@ -616,6 +619,16 @@ jobs:
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             ( cd ./KernelSU && patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch \
               || echo "::warning::10_enable_susfs_for_ksu.patch 未完全应用" )
+          fi
+
+          # 所有补丁都应用完，才能判定「KSU 侧到底有没有 susfs 命令通道」
+          . "$GITHUB_WORKSPACE/.cfg.sh"
+          if ksu_has_susfs; then
+            echo "state=已启用" >> "$GITHUB_OUTPUT"
+            echo "KSU 侧 susfs 集成检查：找到 CONFIG_KSU_SUSFS"
+          else
+            echo "state=未生效（${KSU_TYPE} 分支内核无 susfs 集成）" >> "$GITHUB_OUTPUT"
+            echo "::warning::${KSU_TYPE} 分支内核没有 susfs 集成（找不到 CONFIG_KSU_SUSFS），susfs 不会生效"
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
@@ -716,20 +729,18 @@ jobs:
           patch -p1 -F 3 < lz4kd.patch || echo "::warning::lz4kd.patch 未完全应用"
 
       - name: 添加SUSFS 配置项
-        id: susfs
         # 【修复】原来只看 susfs_enable，ksu_type=none 时会把一堆没人实现的符号写进 defconfig
         if: inputs.susfs_enable && inputs.ksu_type != 'none'
         env:
           KSU_TYPE: ${{ inputs.ksu_type }}
+          SUSFS_STATE: ${{ steps.susfs.outputs.state }}
         run: |
           set -euo pipefail
           . "$GITHUB_WORKSPACE/.cfg.sh"
-          if ! ksu_has_susfs; then
-            echo "state=未生效（${KSU_TYPE} 分支内核无 susfs 集成，需 ksunext / bakasu / ksu）" >> "$GITHUB_OUTPUT"
-            echo "::notice::当前分支内核没有 susfs 集成，跳过 CONFIG_KSU_SUSFS_* 写入（写了也会被 kconfig 丢弃）"
+          if [ "${SUSFS_STATE:-}" != "已启用" ]; then
+            echo "::notice::susfs 状态=${SUSFS_STATE:-未知}，跳过 CONFIG_KSU_SUSFS_* 写入（写了也会被 kconfig 丢弃）"
             exit 0
           fi
-          echo "state=已启用" >> "$GITHUB_OUTPUT"
           cfg CONFIG_KSU_SUSFS y
           cfg CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT y
           cfg CONFIG_KSU_SUSFS_SUS_PATH y
