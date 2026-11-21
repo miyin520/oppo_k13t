@@ -160,7 +160,7 @@ jobs:
           sudo rm -rf /var/lib/man-db/auto-update
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            binutils python-is-python3 libssl-dev libelf-dev libncurses-dev zstd unzip zip aria2
+            binutils python-is-python3 libssl-dev libelf-dev libncurses-dev zstd unzip zip aria2 rsync
 
           KERNEL_ZIP="https://codeload.github.com/oppo-source/android_kernel_oppo_mt6899/zip/refs/heads/oppo/mt6899_b_16.0.0_k13_turbo"
           CLANG_ZIP="https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip"
@@ -284,6 +284,20 @@ jobs:
                      "$GITHUB_WORKSPACE/kernel_workspace/KernelSU-Next"; do
               [ -e "$d" ] || continue
               if grep -rqE '^[[:space:]]*config[[:space:]]+KSU_SUSFS[[:space:]]*$' -R "$d" --include='Kconfig*' 2>/dev/null; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # ksu_has_preinit：当前 KSU 是否提供 preinit API（susfs 的 fs/exec.c 会无条件调用它）
+          ksu_has_preinit() {
+            local d
+            for d in "$GITHUB_WORKSPACE/kernel_workspace/common/drivers/kernelsu" \
+                     "$GITHUB_WORKSPACE/kernel_workspace/KernelSU" \
+                     "$GITHUB_WORKSPACE/kernel_workspace/KernelSU-Next"; do
+              [ -e "$d" ] || continue
+              if grep -rq "ksu_setup_preinit_file" -R "$d" 2>/dev/null; then
                 return 0
               fi
             done
@@ -762,9 +776,20 @@ jobs:
           else
             echo "::warning::未找到 common/build.config.gki，跳过 check_defconfig 处理"
           fi
-          # 跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
-          # 【修复】本树 gki_defconfig 里已有 CONFIG_HEADERS_INSTALL=y，直接追加会产生重复项
-          cfg CONFIG_HEADERS_INSTALL n
+          # 【关键】CONFIG_HEADERS_INSTALL=y 会让 prepare 依赖 headers，从而生成 out/usr/include。
+          # KernelSU-Next / BakaSU 的 preinit（kernelsu-objs += preinit/preinit.o）依赖
+          # $(objtree)/usr/include/linux/unistd.h；关掉它就会：
+          #   -- KernelSU: .../usr/include not found, preinit disabled
+          # 而 susfs 补丁在 fs/exec.c 里无条件调用 ksu_setup_preinit_file() →
+          # 变成 ld.lld: undefined symbol，整次构建挂在链接阶段。
+          # 所以：分支有 preinit 就必须开；没有 preinit 的（sukisunova/none）保持关闭以省时间。
+          if ksu_has_preinit; then
+            cfg CONFIG_HEADERS_INSTALL y
+            echo "所选 KSU 分支带 preinit，已开启 CONFIG_HEADERS_INSTALL（需要 out/usr/include）"
+          else
+            cfg CONFIG_HEADERS_INSTALL n
+            echo "所选 KSU 分支无 preinit，跳过 UAPI 头安装以节省编译时间"
+          fi
 
           # 应用 CVE_2026_43499 修复补丁
           # 【修复】原来没有兜底：上游源码漂移或文件取不到时整次构建直接死
