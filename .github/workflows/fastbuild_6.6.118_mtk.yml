@@ -489,26 +489,40 @@ jobs:
           cp -r ./susfs4ksu/kernel_patches/include/linux/. ./common/include/linux/
 
           cd ./common
-          if ! patch -p1 -F 3 < "$SUSFS_PATCH"; then
-            # 该补丁同一处改动带「新旧两套 hunk」：旧写法在 6.6.89 上必然打不上，属重复。
-            # 所以不用「有没有 hunk 失败」下结论，改看 susfs 的关键钩子到底在不在。
+          : > /tmp/susfs_apply.log
+          # 【坑】50 补丁里同一处改动带「新旧两套 hunk」：旧写法（if 单行）在 6.6.89 上必然打不上，
+          # 新写法已经应用成功。所以不用「有没有 hunk 失败」下结论，改看 susfs 关键标记在不在。
+          # 标记只取真实存在的两个：susfs_sus_ino_for_show_map_vma 那一版函数在本代 susfs 里已不存在，
+          # 69_hide_stuff.patch 里它只是旧版上下文（靠 fuzz 忽略），拿它当标记会误报。
+          if ! patch -p1 -F 3 < "$SUSFS_PATCH" >> /tmp/susfs_apply.log 2>&1; then
+            cat /tmp/susfs_apply.log
             MISSING=0
-            # 只遍历一次源码树，把三个关键标记一起收上来（三次 -r 太慢）
-            FOUND=$(grep -rhoE 'susfs_is_current_proc_umounted|SUSFS_IS_INODE_SUS_MAP|susfs_sus_ino_for_show_map_vma' \
+            FOUND=$(grep -rhoE 'susfs_is_current_proc_umounted|SUSFS_IS_INODE_SUS_MAP' \
                       fs include security kernel 2>/dev/null | sort -u || true)
-            for m in susfs_is_current_proc_umounted SUSFS_IS_INODE_SUS_MAP susfs_sus_ino_for_show_map_vma; do
+            for m in susfs_is_current_proc_umounted SUSFS_IS_INODE_SUS_MAP; do
               if ! printf '%s\n' "${FOUND}" | grep -qx "$m"; then
-                echo "::warning::susfs 关键钩子缺失：$m"
+                echo "::warning::susfs 关键标记缺失：$m"
                 MISSING=1
               fi
             done
             if [ "$MISSING" = "0" ]; then
-              echo "::notice::${SUSFS_PATCH} 有 hunk 未应用，但关键钩子全部存在（失败的是重复的旧版 hunk），按已应用处理"
+              echo "::notice::${SUSFS_PATCH} 有 hunk 未应用，但关键标记齐全（失败的是重复的旧版 hunk），按已应用处理"
             else
-              echo "::warning::${SUSFS_PATCH} 未完全应用且关键钩子缺失，susfs 功能可能不完整"
+              echo "::warning::${SUSFS_PATCH} 未完全应用且关键标记缺失，susfs 功能可能不完整"
             fi
+          else
+            cat /tmp/susfs_apply.log
           fi
-          patch -p1 -N -F 3 < 69_hide_stuff.patch || echo "::warning::69_hide_stuff.patch 未完全应用"
+
+          # 这个补丁是针对更早的 susfs 版本写的，本树只能靠 fuzz 落地，单独标出来
+          patch -p1 -N -F 3 < 69_hide_stuff.patch >> /tmp/susfs_apply.log 2>&1 \
+            || echo "::warning::69_hide_stuff.patch 未完全应用"
+
+          FUZZ=$(grep -c 'with fuzz' /tmp/susfs_apply.log || true)
+          if [ "${FUZZ:-0}" -gt 0 ]; then
+            echo "::notice::susfs 相关补丁有 ${FUZZ} 处以 fuzz 应用（上下文偏移，旧版补丁适配新树），隐藏逻辑建议人工核对"
+          fi
+          grep -E 'FAILED|with fuzz' /tmp/susfs_apply.log | head -n 12 || true
           cd ..
 
           if [ "$KSU_TYPE" = "ksu" ]; then
