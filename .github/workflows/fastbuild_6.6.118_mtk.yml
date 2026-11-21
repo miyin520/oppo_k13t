@@ -132,6 +132,7 @@ jobs:
     timeout-minutes: 350
     outputs:
       ksuver: ${{ steps.ksu_version.outputs.ksuver }}
+      ksuver_self: ${{ steps.build_kernel.outputs.ksuver }}
       ak3name: ${{ steps.create_zip.outputs.ak3name }}
       adios_state: ${{ steps.adios.outputs.state }}
       susfs_state: ${{ steps.susfs.outputs.state }}
@@ -1183,6 +1184,7 @@ jobs:
           echo "===== NoMount 集成完成 ====="
 
       - name: 构建内核
+        id: build_kernel
         run: |
           set -eo pipefail
           WORKDIR="$(pwd)"
@@ -1351,6 +1353,21 @@ jobs:
           LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
           echo "内核编译完成！实际 kernelrelease："
           cat out/include/config/kernel.release || true
+
+          # 【修复】KSU 版本号以「内核自己算出来的」为准。
+          # SukiSU 的 kernel/Makefile 自己会打印 `-- SukiSU-Nova version: 30007 [...]`，
+          # 它的算法是 30000 + main分支commit数 - 4001（和本工作流原来那套 commits+30700 完全不同）。
+          # 管理器显示的是 "3.5.0.5 (35050-6)"（versionCode-UAPIVersion），跟内核版本不是一个量纲，
+          # 包名里应该放内核真正上报的数字，否则刷完对不上管理器显示的内核版本。
+          KSU_SELF=$(grep -oE '^-- .* version: [0-9]+' "$BUILD_LOG" | head -n1 | grep -oE '[0-9]+$' || true)
+          if [ -n "${KSU_SELF:-}" ]; then
+            echo "内核自报 KSU 版本：$KSU_SELF（覆盖脚本估算值 ${KSUVER:-?}）"
+            echo "KSUVER=$KSU_SELF" >> "$GITHUB_ENV"
+            echo "ksuver=$KSU_SELF" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::未能从日志解析内核自报的 KSU 版本，沿用脚本估算值 ${KSUVER:-无}"
+            echo "ksuver=${KSUVER:-}" >> "$GITHUB_OUTPUT"
+          fi
           echo "ccache状态："
           ccache -s
           echo "编译后空间:"
@@ -1607,7 +1624,7 @@ jobs:
           - KSU 原版管理器下载：[KernelSU](https://github.com/tiann/KernelSU/releases)
 
           ### ⏫️ 更新内容：
-          - 更新 ${{ env.KSU_TYPENAME }} 至最新版本（${{ needs.build.outputs.ksuver || '无' }}）
+          - 内核自报 KSU 版本：${{ needs.build.outputs.ksuver_self || needs.build.outputs.ksuver || '无' }}
           - 构建脚本修复：版本后缀单一来源、defconfig 去重、补丁/下载失败改为显式报错、KSU 版本号取值兜底
           - (预留)
 
