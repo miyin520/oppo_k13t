@@ -405,10 +405,31 @@ jobs:
             echo "ksuver=$1" >> "$GITHUB_OUTPUT"
           }
 
+          # 【修复】上游 setup.sh 内部就是 git clone，GitHub 偶发抖动（curl 56 / early EOF）
+          # 会让整步直接死，报错还指向 `cd: .../KernelSU: No such file or directory`，极难看出是网络问题。
+          # 这里做 3 次重试，并用「目录是否真的建出来」兜底（脚本可能 exit 0 但没克隆成功）。
+          setup_ksu() {   # setup_ksu <setup.sh 地址> [参数...]
+            local url="$1"; shift
+            local i
+            for i in 1 2 3; do
+              rm -rf KernelSU KernelSU-Next
+              if curl -fsSL "$url" | bash -s "$@"; then
+                if [ -d KernelSU ] || [ -d KernelSU-Next ]; then
+                  echo "[KernelSU] 安装脚本第 $i 次成功"
+                  return 0
+                fi
+              fi
+              echo "::warning::KernelSU 安装脚本第 $i/3 次失败（多为 git clone 网络抖动），5 秒后重试"
+              sleep 5
+            done
+            echo "::error::KernelSU 安装连续 3 次失败，放弃"
+            return 1
+          }
+
           case "$KSU_TYPE" in
             bakasu)
               echo "正在配置bakaSU..."
-              curl -fsSL "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash
+              setup_ksu "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh"
               printf '%s\n' 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
               cd ./KernelSU
               # 【修复】用 HEAD 而不是写死 main：上游默认分支改名后不会静默退化成 114514
@@ -418,7 +439,7 @@ jobs:
               ;;
             sukisunova)
               echo "正在配置SukiSU Nova..."
-              curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+              setup_ksu "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" main
               printf '%s\n' 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
               cd ./KernelSU
               KSU_VERSION=$(( $(git rev-list --count HEAD 2>/dev/null || echo 0) + 30700 ))
@@ -427,7 +448,7 @@ jobs:
               ;;
             ksunext)
               echo "正在配置KernelSU Next..."
-              curl -fsSL "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+              setup_ksu "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" dev-susfs
               cd KernelSU-Next
               rm -rf .git
               KSU_VERSION=$(( $(last_page pershoot/KernelSU-Next dev) + 30000 ))
@@ -449,7 +470,7 @@ jobs:
               ;;
             ksu)
               echo "正在配置原版 KernelSU (tiann/KernelSU)..."
-              curl -fsSL "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
+              setup_ksu "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" main
               cd ./KernelSU
               KSU_VERSION=$(( $(last_page tiann/KernelSU main) + 30000 ))
               set_ver "$KSU_VERSION"
