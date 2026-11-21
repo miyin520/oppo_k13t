@@ -1,8 +1,8 @@
---- a/fs/proc/task_mmu.c	2024-12-17 11:21:16.646581300 -0500
-+++ b/fs/proc/task_mmu.c	2024-12-17 11:35:36.873887048 -0500
-@@ -416,6 +416,23 @@
- extern void susfs_sus_ino_for_show_map_vma(unsigned long ino, dev_t *out_dev, unsigned long *out_ino);
- #endif
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -271,6 +271,23 @@
+ extern int susfs_open_redirect_spoof_show_map_vma_srcu(struct inode *inode, unsigned long *out_ino, dev_t *out_dev, char **out_spoofed_name);
+ #endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
  
 +static void show_vma_header_prefix_fake(struct seq_file *m,
 +					unsigned long start, unsigned long end,
@@ -24,7 +24,7 @@
  static void
  show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  {
-@@ -427,6 +444,7 @@
+@@ -283,6 +300,7 @@
  	unsigned long start, end;
  	dev_t dev = 0;
  	const char *name = NULL;
@@ -32,10 +32,10 @@
  
  	if (file) {
  		struct inode *inode = file_inode(vma->vm_file);
-@@ -442,6 +460,23 @@
- bypass_orig_flow:
- #endif
- 		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
+@@ -298,6 +316,23 @@
+ #ifdef __fold_filemap_fixup_entry
+ 				__fold_filemap_fixup_entry(&((struct proc_maps_private *)m->private)->iter, &end);
+ else
 +		dentry = file->f_path.dentry;
 +        if (dentry) {
 +        	const char *path = (const char *)dentry->d_name.name; 
@@ -53,20 +53,20 @@
 +			goto bypass;
 +            }
 +        }
- 	}
- 
- 	start = vma->vm_start;
-@@ -449,6 +484,7 @@
- 	if (show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino))
- 		return;
+ 				if (flags & __VM_NO_COMPAT)
+ 					return;
+ #endif
+@@ -333,6 +368,7 @@
+ 	if (mm)
+ 		anon_name = anon_vma_name(vma);
  
 +	bypass:
  	/*
  	 * Print the dentry name for named mappings, and a
  	 * special [heap] marker for the heap:
---- a/fs/proc/base.c	2024-12-15 11:30:00.213422100 -0500
-+++ b/fs/proc/base.c	2024-12-15 11:36:21.422813925 -0500
-@@ -2229,11 +2229,17 @@
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -2308,11 +2308,17 @@
  
  	rc = -ENOENT;
  	vma = find_exact_vma(mm, vm_start, vm_end);
@@ -89,4 +89,3 @@
  	mmap_read_unlock(mm);
  
  out_mmput:
- 
