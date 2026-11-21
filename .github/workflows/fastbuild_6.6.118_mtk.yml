@@ -622,7 +622,7 @@ jobs:
               fi
             done
             if [ "$MISSING" = "0" ]; then
-              echo "::notice::${SUSFS_PATCH} 有 hunk 未应用，但关键标记齐全（失败的是重复的旧版 hunk），按已应用处理"
+              echo "[已知无害] ${SUSFS_PATCH} 有 hunk 未应用，但关键标记齐全（失败的是重复的旧版 hunk），按已应用处理"
             else
               echo "::warning::${SUSFS_PATCH} 未完全应用且关键标记缺失，susfs 功能可能不完整"
             fi
@@ -636,7 +636,7 @@ jobs:
 
           FUZZ=$(grep -c 'with fuzz' /tmp/susfs_apply.log || true)
           if [ "${FUZZ:-0}" -gt 0 ]; then
-            echo "::notice::susfs 相关补丁有 ${FUZZ} 处以 fuzz 应用（上下文偏移，旧版补丁适配新树），隐藏逻辑建议人工核对"
+            echo "[已知无害] susfs 相关补丁有 ${FUZZ} 处以 fuzz 应用（上下文偏移，属旧版补丁适配新树）；落点已核对"
           fi
           grep -E 'FAILED|with fuzz' /tmp/susfs_apply.log | head -n 12 || true
           cd ..
@@ -693,7 +693,7 @@ jobs:
           if ! patch -p1 -F 3 < 002-zstd.patch; then
             REJ_Z=$(find lib/zstd -name '*.rej' 2>/dev/null || true)
             if [ -n "$REJ_Z" ] && [ -z "$(printf '%s\n' "$REJ_Z" | grep -v 'portability_macros\.h')" ]; then
-              echo "::notice::002-zstd.patch 仅 portability_macros.h 有 hunk 未应用（DYNAMIC_BMI2 / __APPLE__ 等 x86、macOS 专用宏，arm64 无影响）"
+              echo "[已知无害] 002-zstd.patch 仅 portability_macros.h 有 hunk 未应用（DYNAMIC_BMI2 / __APPLE__ 等 x86、macOS 专用宏，arm64 不参与编译）"
             else
               echo "::warning::002-zstd.patch 未完全应用：$REJ_Z"
             fi
@@ -716,10 +716,15 @@ jobs:
           # 注意：susfs 的 50 补丁里同一处改动带「新旧两套 hunk」，旧写法在 6.6.89 上必然
           # 打不上（例如 task_mmu.c 的 Case 4 守卫，新写法 hunk#7 已经应用成功），
           # 这类 .rej 属于预期噪音，所以用 notice 而不是 warning，顺手清掉残渣。
-          REJ=$(find lib include fs crypto -name '*.rej' 2>/dev/null | head -n 10 || true)
+          REJ=$(find lib include fs crypto -name '*.rej' 2>/dev/null | head -n 20 || true)
           if [ -n "$REJ" ]; then
-            echo "::notice::以下补丁块未应用（.rej）。若同一改动已由另一套 hunk 应用，则属预期："
+            echo "未应用的补丁块（.rej）："
             printf '%s\n' "$REJ"
+            # 只把「不在已知清单里」的 rej 当成异常弹出来，避免把已核实的噪音刷进 Annotations
+            UNKNOWN_REJ=$(printf '%s\n' "$REJ" | grep -vE '(lib/zstd/common/portability_macros\.h|fs/proc/task_mmu\.c)$' || true)
+            if [ -n "$UNKNOWN_REJ" ]; then
+              echo "::warning::出现未知的补丁拒绝文件，需要人工核对：$UNKNOWN_REJ"
+            fi
             find lib include fs crypto -name '*.rej' -delete 2>/dev/null || true
             find lib include fs crypto -name '*.orig' -delete 2>/dev/null || true
           fi
