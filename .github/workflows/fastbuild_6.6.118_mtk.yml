@@ -424,8 +424,10 @@ jobs:
             local repo="$1" branch="$2" i
             for i in 1 2 3; do
               rm -rf KernelSU KernelSU-Next SukiSU-Nova SukiSU-Ultra
-              # 不能用 --depth=1：浅克隆会让 rev-list --count 失真
+              # 不能浅克隆；另外补一个本地 main 引用，KSU 的版本号靠
+              # `git rev-list --count main` 计算，缺了它就只能走 GitHub API（会被限流）
               if git clone --filter=blob:none -b "$branch" "https://github.com/${repo}" KernelSU \
+                 && git -C KernelSU fetch -q origin "main:main" 2>/dev/null \
                  && bash KernelSU/kernel/setup.sh "$branch"; then
                 if [ -d KernelSU ]; then
                   echo "[KernelSU] 预克隆方式第 $i 次成功（$repo@$branch）"
