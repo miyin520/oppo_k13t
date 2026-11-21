@@ -423,10 +423,18 @@ jobs:
           # 叠加 -e 会让整个 KernelSU 步骤失败。
           last_page() {
             local repo="$1" ref="$2" p
-            p=$(curl -fsSI "https://api.github.com/repos/${repo}/commits?sha=${ref}&per_page=1" 2>/dev/null \
+            # 【修复】这里原来不带任何凭据，走的是匿名限流（60 次/小时/IP）。
+            # 连着跑几次就会拿不到 Link 头 → 静默退化成 1 页 → KSU 版本号变成 30001。
+            # 现在带上 job 自带的 GITHUB_TOKEN（5000 次/小时）。
+            p=$(curl -fsSI -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${repo}/commits?sha=${ref}&per_page=1" 2>/dev/null \
                 | tr -d '\r' \
                 | sed -n 's/.*[?&]page=\([0-9][0-9]*\)>; rel="last".*/\1/p' | head -n1 || true)
-            [ -n "$p" ] || p=1
+            if [ -z "$p" ]; then
+              echo "::warning::没能从 GitHub API 取到提交总数（可能是限流），KSU 版本号会退化为 $((1 + 30000))" >&2
+              p=1
+            fi
             printf '%s' "$p"
           }
 
