@@ -840,6 +840,9 @@ jobs:
           # 而 susfs 补丁在 fs/exec.c 里无条件调用 ksu_setup_preinit_file() →
           # 变成 ld.lld: undefined symbol，整次构建挂在链接阶段。
           # 所以：分支有 preinit 就必须开；没有 preinit 的（sukisunova/none）保持关闭以省时间。
+          echo "--- defconfig 最终值（排查用）---"
+          grep -E '^(CONFIG_ZSMALLOC|CONFIG_DEFAULT_TCP_CONG|CONFIG_ZRAM)=' "$DEFCONFIG" || true
+
           if ksu_has_preinit; then
             cfg CONFIG_HEADERS_INSTALL y
             echo "所选 KSU 分支带 preinit，已开启 CONFIG_HEADERS_INSTALL（需要 out/usr/include）"
@@ -936,9 +939,9 @@ jobs:
           cfg CONFIG_TCP_CONG_BRUTAL y
           if [ "$BBR_MODE" = "default" ]; then
             echo "正在将BBR设为默认拥塞控制算法..."
-            cfg CONFIG_DEFAULT_TCP_CONG bbr
+            cfg CONFIG_DEFAULT_TCP_CONG '"bbr"' 
           else
-            cfg CONFIG_DEFAULT_TCP_CONG cubic
+            cfg CONFIG_DEFAULT_TCP_CONG '"cubic"' 
           fi
 
       - name: 启用 Droidspaces 容器支持
