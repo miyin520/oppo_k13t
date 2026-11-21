@@ -94,6 +94,11 @@ on:
         required: true
         type: boolean
         default: true
+      adios_default:
+        description: '是否把ADIOS设为默认IO调度器(需同时开启ADIOS; 默认否=只编进内核, 可运行时用 sysfs 切换)'
+        required: true
+        type: boolean
+        default: false
       rekernel_enable:
         description: '是否启用Re-Kernel支持(与Freezer/NoActive等软件配合, 提升应用冻结能力; 需要内核树内已有Re-Kernel补丁)'
         required: true
@@ -868,6 +873,8 @@ jobs:
       - name: 启用ADIOS IO调度器
         id: adios
         if: inputs.adios_enable
+        env:
+          ADIOS_DEFAULT: ${{ inputs.adios_default }}
         run: |
           set -euo pipefail
           . "$GITHUB_WORKSPACE/.cfg.sh"
@@ -882,8 +889,14 @@ jobs:
           fi
           if cfg_require MQ_IOSCHED_ADIOS "ADIOS IO调度器"; then
             cfg CONFIG_MQ_IOSCHED_ADIOS y
-            cfg CONFIG_MQ_IOSCHED_DEFAULT_ADIOS y
-            echo "state=已启用" >> "$GITHUB_OUTPUT"
+            if [ "$ADIOS_DEFAULT" = "true" ]; then
+              # 改动默认调度器属于行为变更，只有显式勾选才做
+              cfg CONFIG_MQ_IOSCHED_DEFAULT_ADIOS y
+              echo "state=已启用（ADIOS 为默认调度器）" >> "$GITHUB_OUTPUT"
+            else
+              cfg CONFIG_MQ_IOSCHED_DEFAULT_ADIOS n
+              echo "state=已启用（已编入，非默认；可 echo adios > /sys/block/*/queue/scheduler 切换）" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "state=已跳过（内核树无该调度器源码，需自备 other_patch/adios-${KERNEL_VERSION}.patch）" >> "$GITHUB_OUTPUT"
           fi
