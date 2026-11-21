@@ -1281,6 +1281,23 @@ jobs:
             KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig 2>&1 | tee -a "$BUILD_LOG"
           CFG_RC=${PIPESTATUS[0]}
           MAKE_RC=$CFG_RC
+
+          # 【实证】gki_defconfig 跑完后，直接从 out/.config 抓本次真正生效的功能开关。
+          # 之前只能证明"写进了 defconfig"，这里证明"kconfig 确实采纳了"（未采纳的符号会被静默丢弃）。
+          if [ -f out/.config ]; then
+            echo "===== 本次内核实际生效的功能开关（out/.config）====="
+            EFFECTIVE=$(grep -E '^CONFIG_(KSU|KSU_SUSFS|SUSFS|BBG|NOMOUNT|KEYS|MQ_IOSCHED|REKERNEL|NTSYNC|HEADERS_INSTALL|LZ4|LZ4KD|ZSMALLOC|CRYPTO_LZ4|ZSTD|TCP_CONG_BBR|DEFAULT_TCP_CONG|IP_SET|IP6_NF_NAT|PID_NS|USER_NS|SYSVIPC)' out/.config | sort)
+            printf '%s\n' "$EFFECTIVE"
+            {
+              echo "### 🧩 本次内核实际生效的功能开关"
+              echo ""
+              echo '```'
+              printf '%s\n' "$EFFECTIVE"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::out/.config 不存在，无法核对实际生效的开关"
+          fi
           if [ "$CFG_RC" -eq 0 ]; then
             make -j"$JOBS" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
               CC="$SO_DIR/cc-wrapper" LD="$SO_DIR/ld-wrapper" HOSTLD=ld.lld O=out \
