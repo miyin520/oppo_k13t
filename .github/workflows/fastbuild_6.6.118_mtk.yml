@@ -818,6 +818,10 @@ jobs:
           fi
 
           if [ "$LZ4KD_ENABLE" = "true" ]; then
+            # 【关键】本树 gki_defconfig 里 CONFIG_ZRAM=m，且 ZRAM 会 select ZSMALLOC（无 prompt，
+            # 用户设不动）。我们只编 Image、不编 modules，所以打上 lz4kd 的 zram 根本不会进包。
+            # 想让 lz4kd 真正生效，必须把 zram 内置进内核。
+            cfg CONFIG_ZRAM y
             cfg CONFIG_ZSMALLOC y
             cfg CONFIG_CRYPTO_LZ4HC y
             cfg CONFIG_CRYPTO_LZ4K y
@@ -937,11 +941,17 @@ jobs:
           # brutal：激进抢占吞吐量的算法，需要应用侧显式设置带宽才生效，
           # 绝大部分安卓应用不支持，故不要设为默认
           cfg CONFIG_TCP_CONG_BRUTAL y
+          # 【修复】DEFAULT_TCP_CONG 在本树是 choice 派生出来的字符串
+          # （net/ipv4/Kconfig: default "bbr" if DEFAULT_BBR），
+          # 直接写 CONFIG_DEFAULT_TCP_CONG="bbr" 会被 choice 的默认值覆盖回 cubic。
+          # 必须设置 choice 成员本人。
           if [ "$BBR_MODE" = "default" ]; then
-            echo "正在将BBR设为默认拥塞控制算法..."
-            cfg CONFIG_DEFAULT_TCP_CONG '"bbr"' 
+            echo "正在将BBR设为默认拥塞控制算法（CONFIG_DEFAULT_BBR）..."
+            cfg CONFIG_DEFAULT_BBR y
+            cfg CONFIG_DEFAULT_CUBIC n
           else
-            cfg CONFIG_DEFAULT_TCP_CONG '"cubic"' 
+            cfg CONFIG_DEFAULT_CUBIC y
+            cfg CONFIG_DEFAULT_BBR n
           fi
 
       - name: 启用 Droidspaces 容器支持
