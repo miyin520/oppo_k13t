@@ -128,6 +128,8 @@ jobs:
     outputs:
       ksuver: ${{ steps.ksu_version.outputs.ksuver }}
       ak3name: ${{ steps.create_zip.outputs.ak3name }}
+      adios_state: ${{ steps.adios.outputs.state }}
+      rekernel_state: ${{ steps.rekernel.outputs.state }}
     permissions:
       actions: write
       contents: read
@@ -487,7 +489,25 @@ jobs:
           cp -r ./susfs4ksu/kernel_patches/include/linux/. ./common/include/linux/
 
           cd ./common
-          patch -p1 -F 3 < "$SUSFS_PATCH" || echo "::warning::${SUSFS_PATCH} 未完全应用（上游源码可能已变化）"
+          if ! patch -p1 -F 3 < "$SUSFS_PATCH"; then
+            # 该补丁同一处改动带「新旧两套 hunk」：旧写法在 6.6.89 上必然打不上，属重复。
+            # 所以不用「有没有 hunk 失败」下结论，改看 susfs 的关键钩子到底在不在。
+            MISSING=0
+            # 只遍历一次源码树，把三个关键标记一起收上来（三次 -r 太慢）
+            FOUND=$(grep -rhoE 'susfs_is_current_proc_umounted|SUSFS_IS_INODE_SUS_MAP|susfs_sus_ino_for_show_map_vma' \
+                      fs include security kernel 2>/dev/null | sort -u || true)
+            for m in susfs_is_current_proc_umounted SUSFS_IS_INODE_SUS_MAP susfs_sus_ino_for_show_map_vma; do
+              if ! printf '%s\n' "${FOUND}" | grep -qx "$m"; then
+                echo "::warning::susfs 关键钩子缺失：$m"
+                MISSING=1
+              fi
+            done
+            if [ "$MISSING" = "0" ]; then
+              echo "::notice::${SUSFS_PATCH} 有 hunk 未应用，但关键钩子全部存在（失败的是重复的旧版 hunk），按已应用处理"
+            else
+              echo "::warning::${SUSFS_PATCH} 未完全应用且关键钩子缺失，susfs 功能可能不完整"
+            fi
+          fi
           patch -p1 -N -F 3 < 69_hide_stuff.patch || echo "::warning::69_hide_stuff.patch 未完全应用"
           cd ..
 
@@ -530,7 +550,14 @@ jobs:
           }
           apply_patch 001-lz4.patch
           apply_patch 001-lz4-clearMake.patch
-          patch -p1 -F 3 < 002-zstd.patch || echo "::warning::002-zstd.patch 未完全应用"
+          if ! patch -p1 -F 3 < 002-zstd.patch; then
+            REJ_Z=$(find lib/zstd -name '*.rej' 2>/dev/null || true)
+            if [ -n "$REJ_Z" ] && [ -z "$(printf '%s\n' "$REJ_Z" | grep -v 'portability_macros\.h')" ]; then
+              echo "::notice::002-zstd.patch 仅 portability_macros.h 有 hunk 未应用（DYNAMIC_BMI2 / __APPLE__ 等 x86、macOS 专用宏，arm64 无影响）"
+            else
+              echo "::warning::002-zstd.patch 未完全应用：$REJ_Z"
+            fi
+          fi
 
           # 兜底：万一 rename 没落地，把 lz4armv8 三件套补到 lib/lz4/lz4armv8/
           mkdir -p lib/lz4/lz4armv8
@@ -825,6 +852,7 @@ jobs:
           fi
 
       - name: 启用ADIOS IO调度器
+        id: adios
         if: inputs.adios_enable
         run: |
           set -euo pipefail
@@ -841,9 +869,13 @@ jobs:
           if cfg_require MQ_IOSCHED_ADIOS "ADIOS IO调度器"; then
             cfg CONFIG_MQ_IOSCHED_ADIOS y
             cfg CONFIG_MQ_IOSCHED_DEFAULT_ADIOS y
+            echo "state=已启用" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=已跳过（内核树无该调度器源码，需自备 other_patch/adios-${KERNEL_VERSION}.patch）" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 启用Re-Kernel支持
+        id: rekernel
         if: inputs.rekernel_enable
         run: |
           set -euo pipefail
@@ -857,6 +889,9 @@ jobs:
           fi
           if cfg_require REKERNEL "Re-Kernel"; then
             cfg CONFIG_REKERNEL y
+            echo "state=已启用" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=已跳过（内核树无该功能源码，需自备 other_patch/rekernel-${KERNEL_VERSION}.patch）" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 启用内核级基带保护
@@ -1368,8 +1403,8 @@ jobs:
           - 网络功能增强：${{ inputs.better_net }}
           - BBR/Brutal 等拥塞控制算法支持：${{ inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ inputs.droidspaces_enable }}
-          - IO 调度器支持(ADIOS)：${{ inputs.adios_enable }}
-          - Re-Kernel 支持：${{ inputs.rekernel_enable }}
+          - IO 调度器支持(ADIOS)：${{ needs.build.outputs.adios_state || '未启用' }}
+          - Re-Kernel 支持：${{ needs.build.outputs.rekernel_state || '未启用' }}
           - 内核级基带保护支持：${{ inputs.baseband_guard }}
           - BakaSU 管理器下载：[BakaSU_CI](https://github.com/cctv18/BakaSU_CI/releases)
           - SukiSU Ultra 管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
