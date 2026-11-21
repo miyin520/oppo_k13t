@@ -495,8 +495,19 @@ jobs:
               fi
               # 为KernelSU Next添加WildKSU管理器支持
               cd ../common/drivers/kernelsu
-              wget -q "https://github.com/${GITHUB_REPOSITORY}/raw/refs/heads/${GITHUB_REF_NAME}/other_patch/apk_sign.patch"
-              patch -p2 -N -F 3 < apk_sign.patch || echo "::warning::apk_sign.patch 未完全应用"
+              wget -q "https://github.com/${GITHUB_REPOSITORY}/raw/refs/heads/${GITHUB_REF_NAME}/other_patch/apk_sign.patch" -O apk_sign.patch
+              # 【修复】原来写死 -p2：KernelSU-Next 的 drivers/kernelsu 指向仓库根（文件在 kernel/ 下），
+              # 需要 -p1；写错会退化成交互式 "File to patch:" 提示（靠 EOF 才没卡死）。
+              # 这里用 --dry-run 逐级探测正确的 strip 层级，并加 --batch 杜绝交互。
+              P_LEVEL=""
+              for lv in 1 2 3; do
+                if patch -p"$lv" --batch --dry-run -N -F 3 < apk_sign.patch >/dev/null 2>&1; then P_LEVEL="$lv"; break; fi
+              done
+              if [ -n "$P_LEVEL" ]; then
+                patch -p"$P_LEVEL" --batch -N -F 3 < apk_sign.patch && echo "apk_sign.patch 以 -p$P_LEVEL 应用成功"
+              else
+                echo "::warning::apk_sign.patch 无法定位目标文件（-p1/-p2/-p3 均不可用），WildKSU 管理器签名支持可能缺失"
+              fi
               ;;
             ksu)
               echo "正在配置原版 KernelSU (tiann/KernelSU)..."
