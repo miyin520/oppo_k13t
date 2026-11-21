@@ -721,7 +721,8 @@ jobs:
             echo "未应用的补丁块（.rej）："
             printf '%s\n' "$REJ"
             # 只把「不在已知清单里」的 rej 当成异常弹出来，避免把已核实的噪音刷进 Annotations
-            UNKNOWN_REJ=$(printf '%s\n' "$REJ" | grep -vE '(lib/zstd/common/portability_macros\.h|fs/proc/task_mmu\.c)$' || true)
+            # 注意要匹配带 .rej 后缀的完整路径，否则排除不生效（踩过）
+            UNKNOWN_REJ=$(printf '%s\n' "$REJ" | grep -vE '(lib/zstd/common/portability_macros\.h\.rej|fs/proc/task_mmu\.c\.rej)$' || true)
             if [ -n "$UNKNOWN_REJ" ]; then
               echo "::warning::出现未知的补丁拒绝文件，需要人工核对：$UNKNOWN_REJ"
             fi
