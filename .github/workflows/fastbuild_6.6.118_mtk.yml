@@ -1058,12 +1058,6 @@ jobs:
           set -uo pipefail
           . "$GITHUB_WORKSPACE/.cfg.sh"
           echo "===== 集成 NoMount ref=$NOMOUNT_REF mode=$NOMOUNT_MODE ====="
-          # FinaSU 自带 NoMount 后端（userspace/nomount/kernel，由管理器按 LKM/Built-in 管理），
-          # 两套 VFS 重定向同时存在会互相打架，所以这个分支跳过我们这套
-          if [ "${KSU_TYPE:-}" = "finasu" ]; then
-            echo "FinaSU 分支使用自带的 NoMount 后端，跳过本步骤"
-            exit 0
-          fi
           if [ "$NOMOUNT_MODE" = "none" ]; then
             echo "已按配置跳过 NoMount"
             exit 0
@@ -1113,6 +1107,13 @@ jobs:
           cfg CONFIG_KEYS y
           cfg CONFIG_ASSOCIATIVE_ARRAY y
           grep -nE '^CONFIG_(NOMOUNT|KEYS|ASSOCIATIVE_ARRAY)=' "$DEFCONFIG" || true
+          # FinaSU 的 ksud 按驱动版本探活，v2.2.0 会被判成“驱动不可用”。
+          # 直接把内核树里的实现换成 FinaSU 仓库自带的新版（目录结构一致，覆盖即可）。
+          if [ "${KSU_TYPE:-}" = "finasu" ] && [ -d "$GITHUB_WORKSPACE/kernel_workspace/FinaSU/userspace/nomount/kernel/src" ]; then
+            cp -r "$GITHUB_WORKSPACE/kernel_workspace/FinaSU/userspace/nomount/kernel/src/." common/fs/nomount/
+            echo "已用 FinaSU 自带 NoMount 驱动覆盖（$(grep -m1 NOMOUNT_BASE_VERSION common/fs/nomount/nomount.h || echo '版本未知')）"
+          fi
+
           echo "===== NoMount 集成完成 ====="
 
       - name: 构建内核
