@@ -1050,6 +1050,7 @@ jobs:
 
       - name: 集成 NoMount（v2.2.0）
         env:
+          KSU_TYPE: ${{ inputs.ksu_type }}
           NOMOUNT_REF: ${{ vars.NOMOUNT_REF || 'v2.2.0' }}
           # y = 编进内核(Image 内置) / m = 编成 LKM / none = 跳过本步骤
           NOMOUNT_MODE: y
@@ -1057,6 +1058,12 @@ jobs:
           set -uo pipefail
           . "$GITHUB_WORKSPACE/.cfg.sh"
           echo "===== 集成 NoMount ref=$NOMOUNT_REF mode=$NOMOUNT_MODE ====="
+          # FinaSU 自带 NoMount 后端（userspace/nomount/kernel，由管理器按 LKM/Built-in 管理），
+          # 两套 VFS 重定向同时存在会互相打架，所以这个分支跳过我们这套
+          if [ "${KSU_TYPE:-}" = "finasu" ]; then
+            echo "FinaSU 分支使用自带的 NoMount 后端，跳过本步骤"
+            exit 0
+          fi
           if [ "$NOMOUNT_MODE" = "none" ]; then
             echo "已按配置跳过 NoMount"
             exit 0
