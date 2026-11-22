@@ -1339,6 +1339,7 @@ jobs:
             bakasu)     KSU_TYPENAME="BakaSU" ;;
             ksunext)    KSU_TYPENAME="KSUNext" ;;
             ksu)        KSU_TYPENAME="KSU" ;;
+            finasu)     KSU_TYPENAME="FinaSU" ;;
             *)          KSU_TYPENAME="无内置KSU" ;;
           esac
 
@@ -1482,6 +1483,7 @@ jobs:
             bakasu)     KSU_TYPENAME="BakaSU" ;;
             ksunext)    KSU_TYPENAME="KernelSU Next" ;;
             ksu)        KSU_TYPENAME="KernelSU (Official)" ;;
+            finasu)     KSU_TYPENAME="FinaSU" ;;
             *)          KSU_TYPENAME="无内置KSU" ;;
           esac
           echo "KSU_TYPENAME=$KSU_TYPENAME" >> "$GITHUB_ENV"
