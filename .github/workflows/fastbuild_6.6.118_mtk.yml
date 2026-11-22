@@ -108,6 +108,11 @@ on:
         required: false
         type: string
         default: ''
+      builder_name:
+        description: 'AK3 刷机包里的构建者名称(留空则用 GitHub 用户名)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -1018,6 +1023,7 @@ jobs:
       - name: 设置内核版本后缀
         env:
           KERNEL_SUFFIX_IN: ${{ inputs.kernel_suffix }}
+          BUILDER_NAME: ${{ inputs.builder_name }}
         run: |
           set -euo pipefail
           . "$GITHUB_WORKSPACE/.cfg.sh"
@@ -1337,6 +1343,23 @@ jobs:
           rm -rf ./AnyKernel3/.git
           cd AnyKernel3
 
+          # 自动写入构建者名称（上游 anykernel.sh 里写死的是 cctv18）
+          BUILDER="${BUILDER_NAME:-$GITHUB_ACTOR}"
+          python3 - "$BUILDER" <<'PYEOF'
+          import re, sys
+          name = sys.argv[1]
+          path = "anykernel.sh"
+          text = open(path, encoding="utf-8").read()
+          text = re.sub(r"^kernel\.string=.*$",
+                        "kernel.string=AnyKernel3 by KernelSU Developers | Build by " + name,
+                        text, count=1, flags=re.M)
+          text = re.sub(r"^(ui_print \"内核构建者:).*(\")\s*$",
+                        r"\1 " + name + r"\2",
+                        text, count=1, flags=re.M)
+          open(path, "w", encoding="utf-8").write(text)
+          print("AK3 构建者已设为:", name)
+          PYEOF
+
           # 先确认源镜像存在
           SRC_IMAGE="../common/out/arch/arm64/boot/Image"
           [ -s "$SRC_IMAGE" ] || { echo "::error::未找到内核镜像 $SRC_IMAGE，构建可能出错"; exit 1; }
@@ -1393,7 +1416,7 @@ jobs:
           fi
           TIME_NOW="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
           {
-            echo "Author: $GITHUB_ACTOR"
+            echo "Author: ${BUILDER}"
             echo "Repo: $GITHUB_REPOSITORY"
             echo "Branch: $GITHUB_REF_NAME"
             echo "Run ID: $GITHUB_RUN_ID"
