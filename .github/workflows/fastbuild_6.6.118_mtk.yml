@@ -1048,10 +1048,10 @@ jobs:
           echo "当前 defconfig 中的版本相关配置："
           grep -nE '^CONFIG_LOCALVERSION' "$DEFCONFIG" || true
 
-      - name: 集成 NoMount（v2.2.0）
+      - name: 集成 NoMount（默认 v2.3.1）
         env:
           KSU_TYPE: ${{ inputs.ksu_type }}
-          NOMOUNT_REF: ${{ vars.NOMOUNT_REF || 'v2.2.0' }}
+          NOMOUNT_REF: ${{ vars.NOMOUNT_REF || 'v2.3.1' }}
           # y = 编进内核(Image 内置) / m = 编成 LKM / none = 跳过本步骤
           NOMOUNT_MODE: y
         run: |
